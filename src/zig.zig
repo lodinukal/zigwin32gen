@@ -126,7 +126,20 @@ pub fn typedConst(comptime T: type, comptime value: anytype) ?T {
     return typedConst2(T, T, value);
 }
 
-pub fn typedConst2(comptime ReturnType: type, comptime SwitchType: type, comptime value: anytype) if (value == 0) ?ReturnType else ReturnType {
+pub fn ModifiedReturnType(comptime T: type, comptime U: type, comptime value: anytype) type {
+    // if the return type is a pointer and the value is 0, we need to return a pointer to the return type
+    // otherwise, we can just return the return type
+
+    return switch (@typeInfo(U)) {
+        .Pointer => |target_type_info| switch (target_type_info.size) {
+            .One, .Many, .C => if (target_type_info.is_allowzero) T else (if (value == 0) ?T else T),
+            else => T,
+        },
+        else => T,
+    };
+}
+
+pub fn typedConst2(comptime ReturnType: type, comptime SwitchType: type, comptime value: anytype) ModifiedReturnType(ReturnType, SwitchType, value) {
     const target_type_error = @as([]const u8, "typedConst cannot convert to " ++ @typeName(ReturnType));
     const value_type_error = @as([]const u8, "typedConst cannot convert " ++ @typeName(@TypeOf(value)) ++ " to " ++ @typeName(ReturnType));
 
@@ -145,7 +158,7 @@ pub fn typedConst2(comptime ReturnType: type, comptime SwitchType: type, comptim
                 switch (@typeInfo(@TypeOf(value))) {
                     .ComptimeInt, .Int => {
                         const usize_value = if (value >= 0) value else @as(usize, @bitCast(@as(isize, value)));
-                        return @alignCast(@as(if (value == 0) ?ReturnType else ReturnType, @ptrFromInt(usize_value)));
+                        return @alignCast(@as(ModifiedReturnType(ReturnType, SwitchType, value), @ptrFromInt(usize_value)));
                     },
                     else => @compileError(value_type_error),
                 }
