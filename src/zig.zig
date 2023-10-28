@@ -126,7 +126,7 @@ pub fn typedConst(comptime T: type, comptime value: anytype) ?T {
     return typedConst2(T, T, value);
 }
 
-pub fn typedConst2(comptime ReturnType: type, comptime SwitchType: type, comptime value: anytype) ?ReturnType {
+pub fn typedConst2(comptime ReturnType: type, comptime SwitchType: type, comptime value: anytype) if (value == 0) ?ReturnType else ReturnType {
     const target_type_error = @as([]const u8, "typedConst cannot convert to " ++ @typeName(ReturnType));
     const value_type_error = @as([]const u8, "typedConst cannot convert " ++ @typeName(@TypeOf(value)) ++ " to " ++ @typeName(ReturnType));
 
@@ -145,7 +145,7 @@ pub fn typedConst2(comptime ReturnType: type, comptime SwitchType: type, comptim
                 switch (@typeInfo(@TypeOf(value))) {
                     .ComptimeInt, .Int => {
                         const usize_value = if (value >= 0) value else @as(usize, @bitCast(@as(isize, value)));
-                        return @alignCast(@as(?ReturnType, @ptrFromInt(usize_value)));
+                        return @alignCast(@as(if (value == 0) ?ReturnType else ReturnType, @ptrFromInt(usize_value)));
                     },
                     else => @compileError(value_type_error),
                 }
