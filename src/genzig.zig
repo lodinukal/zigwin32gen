@@ -1071,7 +1071,8 @@ fn generateTypeRefRec(sdk_file: *SdkFile, writer: *CodeWriter, self: TypeRefForm
                 const base_type = if (special == .pstr) "u8" else "u16";
                 const sentinel_suffix = if (self.options.not_null_term) "" else ":0";
                 const const_str = if (self.options.is_const) "const " else "";
-                try writer.writef("[*{s}]{s}{s}", .{ sentinel_suffix, const_str, base_type }, .{ .start = .any, .nl = false });
+                // align(1) so that it can convert from non 2 byte aligned
+                try writer.writef("[*{s}]align(1) {s}{s}", .{ sentinel_suffix, const_str, base_type }, .{ .start = .any, .nl = false });
                 return;
             }
         }
@@ -1321,7 +1322,7 @@ fn generateConstant(sdk_file: *SdkFile, writer: *CodeWriter, constant_obj: json.
             try writer.writef("pub const {s} = ", .{name_pool}, .{ .nl = false });
             try generateTypeRef(sdk_file, writer, zig_type_formatter);
             sdk_file.uses_guid = true;
-            try writer.writef(" {{ .fmtid = Guid.initString(\"{s}\"), .pid = {} }};", .{ fmtid, pid }, .{ .start = .mid });
+            try writer.writef(" {{ .fmtid = Guid.initIntString(\"{s}\"), .pid = {} }};", .{ fmtid, pid }, .{ .start = .mid });
         } else if (value_type == .SID) {
             const value_array: std.json.Array = switch (value_node) {
                 .array => |arr| arr,
@@ -1568,17 +1569,23 @@ fn generateTypeDefinition(
             return;
         }
 
+        var find_std_sym = @import("handletypes.zig").std_handle_types.get(pool_name.slice);
+
         switch (also_usable_for_node) {
             .string => |also_usable_for| {
-                if (also_usable_type_api_map.get(also_usable_for)) |api| {
-                    try sdk_file.addApiImport(arches, also_usable_for, api, json.Array{ .items = &[_]json.Value{}, .capacity = 0, .allocator = allocator });
-                    try writer.linef("//TODO: type '{s}' is \"AlsoUsableFor\" '{s}' which means this type is implicitly", .{ pool_name, also_usable_for });
-                    try writer.linef("//      convertible to '{s}' but not the other way around.  I don't know how to do this", .{also_usable_for});
-                    try writer.line("//      in Zig so for now I'm just defining it as an alias");
-                    try writer.linef("{s}{s}{s}", .{ def_prefix, also_usable_for, def_suffix });
-                    //try writer.linef("{s}extern struct {{ base: {s} }}{s}", .{def_prefix, also_usable_for, def_suffix});
-                } else std.debug.panic("AlsoUsableFor type '{s}' is missing from alsoUsableForApiMap", .{also_usable_for});
-                return;
+                // this needs to be done otherwise HINSTANCE will alias HMODULE and vice versa
+                // which is undesirable because it causes a dependency loop
+                if (find_std_sym == null) {
+                    if (also_usable_type_api_map.get(also_usable_for)) |api| {
+                        try sdk_file.addApiImport(arches, also_usable_for, api, json.Array{ .items = &[_]json.Value{}, .capacity = 0, .allocator = allocator });
+                        try writer.linef("//TODO: type '{s}' is \"AlsoUsableFor\" '{s}' which means this type is implicitly", .{ pool_name, also_usable_for });
+                        try writer.linef("//      convertible to '{s}' but not the other way around.  I don't know how to do this", .{also_usable_for});
+                        try writer.line("//      in Zig so for now I'm just defining it as an alias");
+                        try writer.linef("{s}{s}{s}", .{ def_prefix, also_usable_for, def_suffix });
+                        //try writer.linef("{s}extern struct {{ base: {s} }}{s}", .{def_prefix, also_usable_for, def_suffix});
+                    } else std.debug.panic("AlsoUsableFor type '{s}' is missing from alsoUsableForApiMap", .{also_usable_for});
+                    return;
+                }
             },
             .null => {},
             else => jsonPanic(),
@@ -1586,7 +1593,7 @@ fn generateTypeDefinition(
 
         // NOTE: for now, I'm just hardcoding a few types to redirect to the ones defined in 'std'
         //       this allows apps to use values of these types interchangeably with bindings in std
-        if (@import("handletypes.zig").std_handle_types.get(pool_name.slice)) |std_sym| {
+        if (find_std_sym) |std_sym| {
             try writer.linef("{s}@import(\"std\").{s}{s}", .{ def_prefix, std_sym, def_suffix });
             return;
         }
@@ -2498,7 +2505,7 @@ fn generateFunction(
             // we modify the dll_import to be lowercase because zig generates
             // the .lib files using lowercase since that's what mingw uses.
             // note the casing only matters on case-sensitive filesystems
-            try writer.linef("pub extern \"{s}\" fn {s}(", .{ fmtLower(dll_import, 100), std.zig.fmtId(func_name_tmp) });
+            try writer.linef("pub extern \"{s}\" fn {s}(", .{ fmtLower(std.fs.path.stem(dll_import), 100), std.zig.fmtId(func_name_tmp) });
         },
         .ptr => |ptr_data_union| switch (ptr_data_union) {
             .stage1 => try writer.line(".stage1 => fn("),

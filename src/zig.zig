@@ -62,6 +62,19 @@ pub const Guid = extern union {
         }
         return guid;
     }
+
+    pub fn initIntString(s: []const u8) Guid {
+        var guid = Guid{ .Bytes = undefined };
+        const It = std.mem.SplitIterator(u8, .sequence);
+        var it = It{ .buffer = s, .index = 0, .delimiter = ", " };
+        guid.Ints.a = std.fmt.parseInt(u32, it.next() orelse @panic("invalid guid"), 10) catch unreachable;
+        guid.Ints.b = std.fmt.parseInt(u16, it.next() orelse @panic("invalid guid"), 10) catch unreachable;
+        guid.Ints.c = std.fmt.parseInt(u16, it.next() orelse @panic("invalid guid"), 10) catch unreachable;
+        for (0..8) |i| {
+            guid.Ints.d[i] = std.fmt.parseInt(u8, it.next() orelse @panic("invalid guid"), 10) catch unreachable;
+        }
+        return guid;
+    }
 };
 comptime {
     std.debug.assert(@sizeOf(Guid) == 16);
@@ -104,25 +117,20 @@ pub fn SUCCEEDED(hr: @import("windows/win32/foundation.zig").HRESULT) bool {
     return hr >= 0;
 }
 
-// These constants were removed from the metadata to allow each projection
-// to define them however they like (see https://github.com/microsoft/win32metadata/issues/530)
-pub const FALSE: @import("windows/win32/foundation.zig").BOOL = 0;
-pub const TRUE: @import("windows/win32/foundation.zig").BOOL = 1;
-
 /// Converts comptime values to the given type.
 /// Note that this function is called at compile time rather than converting constant values earlier at code generation time.
 /// The reason for doing it a compile time is because genzig.zig generates all constants as they are encountered which can
 /// be before it knows the constant's type definition, so we delay the convession to compile-time where the compiler knows
 /// all type definition.
-pub fn typedConst(comptime T: type, comptime value: anytype) T {
+pub fn typedConst(comptime T: type, comptime value: anytype) ?T {
     return typedConst2(T, T, value);
 }
 
-pub fn typedConst2(comptime ReturnType: type, comptime SwitchType: type, comptime value: anytype) ReturnType {
+pub fn typedConst2(comptime ReturnType: type, comptime SwitchType: type, comptime value: anytype) ?ReturnType {
     const target_type_error = @as([]const u8, "typedConst cannot convert to " ++ @typeName(ReturnType));
     const value_type_error = @as([]const u8, "typedConst cannot convert " ++ @typeName(@TypeOf(value)) ++ " to " ++ @typeName(ReturnType));
 
-    switch (@typeInfo(SwitchType)) {
+    _ = switch (@typeInfo(SwitchType)) {
         .Int => |target_type_info| {
             if (value >= std.math.maxInt(SwitchType)) {
                 if (target_type_info.signedness == .signed) {
@@ -137,7 +145,7 @@ pub fn typedConst2(comptime ReturnType: type, comptime SwitchType: type, comptim
                 switch (@typeInfo(@TypeOf(value))) {
                     .ComptimeInt, .Int => {
                         const usize_value = if (value >= 0) value else @as(usize, @bitCast(@as(isize, value)));
-                        return @as(ReturnType, @ptrFromInt(usize_value));
+                        return @alignCast(@as(?ReturnType, @ptrFromInt(usize_value)));
                     },
                     else => @compileError(value_type_error),
                 }
@@ -153,11 +161,11 @@ pub fn typedConst2(comptime ReturnType: type, comptime SwitchType: type, comptim
             else => target_type_error,
         },
         else => @compileError(target_type_error),
-    }
+    };
 }
 test "typedConst" {
-    try testing.expectEqual(@as(usize, @bitCast(@as(isize, -1))), @intFromPtr(typedConst(?*opaque {}, -1)));
-    try testing.expectEqual(@as(usize, @bitCast(@as(isize, -12))), @intFromPtr(typedConst(?*opaque {}, -12)));
-    try testing.expectEqual(@as(u32, 0xffffffff), typedConst(u32, 0xffffffff));
-    try testing.expectEqual(@as(i32, @bitCast(@as(u32, 0x80000000))), typedConst(i32, 0x80000000));
+    try testing.expectEqual(@as(usize, @bitCast(@as(isize, -1))), @intFromPtr(typedConst(*opaque {}, -1)));
+    try testing.expectEqual(@as(usize, @bitCast(@as(isize, -12))), @intFromPtr(typedConst(*opaque {}, -12)));
+    try testing.expectEqual(@as(?u32, 0xffffffff), typedConst(u32, 0xffffffff));
+    try testing.expectEqual(@as(?i32, @bitCast(@as(u32, 0x80000000))), typedConst(i32, 0x80000000));
 }
