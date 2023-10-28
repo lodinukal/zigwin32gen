@@ -22,7 +22,7 @@ pub fn build(b: *Builder) !void {
     const win32json_repo = GitRepoStep.create(b, .{
         .url = "https://github.com/lodinukal/win32json",
         .branch = "55.0.45-preview",
-        .sha = "68c59ba87bbcfeb8a714fb05d5dda93b94bce230",
+        .sha = "8a8556d2458ea3978430c3a4919a1511f133e2d4",
     });
 
     const run_pass1 = blk: {
