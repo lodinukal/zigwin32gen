@@ -122,7 +122,7 @@ pub fn SUCCEEDED(hr: @import("windows/win32/foundation.zig").HRESULT) bool {
 /// The reason for doing it a compile time is because genzig.zig generates all constants as they are encountered which can
 /// be before it knows the constant's type definition, so we delay the convession to compile-time where the compiler knows
 /// all type definition.
-pub fn typedConst(comptime T: type, comptime value: anytype) ?T {
+pub fn typedConst(comptime T: type, comptime value: anytype) T {
     return typedConst2(T, T, value);
 }
 
