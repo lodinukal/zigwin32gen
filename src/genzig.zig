@@ -34,6 +34,7 @@ var global_notnull: json.ObjectMap = undefined;
 
 const ValueType = enum {
     Byte,
+    Int16,
     UInt16,
     Int32,
     UInt32,
@@ -43,9 +44,11 @@ const ValueType = enum {
     Double,
     String,
     PropertyKey,
+    SID,
 };
 const global_value_type_map = std.ComptimeStringMap(ValueType, .{
     .{ "Byte", ValueType.Byte },
+    .{ "Int16", ValueType.Int16 },
     .{ "UInt16", ValueType.UInt16 },
     .{ "Int32", ValueType.Int32 },
     .{ "UInt32", ValueType.UInt32 },
@@ -55,10 +58,12 @@ const global_value_type_map = std.ComptimeStringMap(ValueType, .{
     .{ "Double", ValueType.Double },
     .{ "String", ValueType.String },
     .{ "PropertyKey", ValueType.PropertyKey },
+    .{ "SID", ValueType.SID },
 });
 fn valueTypeToZigType(t: ValueType) []const u8 {
     return switch (t) {
         .Byte => return "u8",
+        .Int16 => return "i16",
         .UInt16 => return "u16",
         .Int32 => return "i32",
         .UInt32 => return "u32",
@@ -68,6 +73,7 @@ fn valueTypeToZigType(t: ValueType) []const u8 {
         .Double => return "f64",
         .String => return "[]const u8",
         .PropertyKey => @panic("cannot call valueTypeToZigType for ValueType.PropertyKey"),
+        .SID => @panic("cannot call valueTypeToZigType for ValueType.SID"),
     };
 }
 
@@ -175,6 +181,7 @@ const import_prefix_table = &[_][]const u8{
     "../../",
     "../../../",
     "../../../../",
+    "../../../../../",
 };
 
 const ApiImport = struct {
@@ -217,7 +224,7 @@ const SdkFile = struct {
     json_basename: []const u8,
     json_name: []const u8,
     zig_name: []const u8,
-    depth: u2,
+    depth: u4,
     const_exports: ArrayList(StringPool.Val),
     uses_guid: bool,
     top_level_api_imports: StringPool.HashMap(ApiImport),
@@ -574,7 +581,7 @@ fn readAndGenerateApiFile(root_module: *Module, out_dir: std.fs.Dir, json_basena
     defer if (module_dir.fd != out_dir.fd) module_dir.close();
 
     var module: *Module = root_module;
-    var depth: u2 = 0;
+    var depth: u4 = 0;
 
     {
         var it = std.mem.tokenize(u8, zig_name, ".");
@@ -1309,11 +1316,38 @@ fn generateConstant(sdk_file: *SdkFile, writer: *CodeWriter, constant_obj: json.
             };
             try jsonObjEnforceKnownFieldsOnly(value_obj, &[_][]const u8{ "Fmtid", "Pid" }, sdk_file);
             const fmtid = (try jsonObjGetRequired(value_obj, "Fmtid", sdk_file)).string;
-            const pid = (try jsonObjGetRequired(value_obj, "Pid", sdk_file)).integer;
+            const pid_search = (try jsonObjGetRequired(value_obj, "Pid", sdk_file));
+            const pid = if (pid_search == .integer) pid_search.integer else 0;
             try writer.writef("pub const {s} = ", .{name_pool}, .{ .nl = false });
             try generateTypeRef(sdk_file, writer, zig_type_formatter);
             sdk_file.uses_guid = true;
             try writer.writef(" {{ .fmtid = Guid.initString(\"{s}\"), .pid = {} }};", .{ fmtid, pid }, .{ .start = .mid });
+        } else if (value_type == .SID) {
+            const value_array: std.json.Array = switch (value_node) {
+                .array => |arr| arr,
+                else => jsonPanicMsg("expected SID to be an array but got: {s}", .{fmtJson(value_node)}),
+            };
+            jsonEnforceMsg(
+                value_array.items.len == 6,
+                "expected SID to have 6 members but got {} members",
+                .{value_array.items.len},
+            );
+            try writer.writef("pub const {s} = ", .{name_pool}, .{ .nl = false });
+            try generateTypeRef(sdk_file, writer, zig_type_formatter);
+            try writer.write("{ .Value = .{", .{
+                .start = .mid,
+                .nl = false,
+            });
+            for (value_array.items, 0..) |value, index| {
+                try writer.writef(" {}{s}", .{
+                    value.integer,
+                    if (index != value_array.items.len - 1) "," else " ",
+                }, .{
+                    .start = .any,
+                    .nl = false,
+                });
+            }
+            try writer.write("} };", .{ .start = .mid });
         } else {
             try writer.writef("pub const {s} = @import(\"{s}zig.zig\").typedConst(", .{
                 name_pool,
@@ -1329,11 +1363,15 @@ fn generateConstant(sdk_file: *SdkFile, writer: *CodeWriter, constant_obj: json.
 
 // workaround https://github.com/microsoft/win32metadata/issues/389
 const also_usable_type_api_map = std.ComptimeStringMap([]const u8, .{
-    .{ "HDC", "Graphics.Gdi" },
-    .{ "HGDIOBJ", "Graphics.Gdi" },
-    .{ "HICON", "UI.WindowsAndMessaging" },
-    .{ "HANDLE", "System.SystemServices" },
-    .{ "HeapHandle", "System.SystemServices" },
+    .{ "HDC", "Windows.Win32.Graphics.Gdi" },
+    .{ "HGDIOBJ", "Windows.Win32.Graphics.Gdi" },
+    .{ "HICON", "Windows.Win32.UI.WindowsAndMessaging" },
+    .{ "HANDLE", "Windows.Win32.Foundation" },
+    .{ "HeapHandle", "Windows.Win32.System.SystemServices" },
+    .{ "HINSTANCE", "Windows.Win32.Foundation" },
+    .{ "HMODULE", "Windows.Win32.Foundation" },
+    .{ "BCRYPT_HANDLE", "Windows.Win32.Security.Cryptography" },
+    .{ "NCRYPT_HANDLE", "Windows.Win32.Security.Cryptography" },
 });
 
 const Depth = u3;
@@ -1473,7 +1511,7 @@ fn generateTypeDefinition(
     def_prefix: []const u8,
     def_suffix: []const u8,
 ) !void {
-    if (std.mem.eql(u8, kind, "NativeTypedef")) {
+    if (std.mem.eql(u8, kind, "NativeTypedef") or std.mem.eql(u8, kind, "MetadataTypedef")) {
         try jsonObjEnforceKnownFieldsOnly(type_obj, &[_][]const u8{ "Name", "Platform", "Architectures", "AlsoUsableFor", "Kind", "Def", "FreeFunc", "InvalidHandleValue" }, sdk_file);
         const also_usable_for_node = try jsonObjGetRequired(type_obj, "AlsoUsableFor", sdk_file);
         const def_type = (try jsonObjGetRequired(type_obj, "Def", sdk_file)).object;
@@ -1782,7 +1820,8 @@ fn shortEnumValueName(enum_type_name: []const u8, full_value_name: []const u8) [
 const suppress_enum_aliases = blk: {
     @setEvalBranchQuota(3000);
     break :blk std.ComptimeStringMap(Nothing, .{
-
+        // suppress because VK_F is another struct,
+        .{ "VIRTUAL_KEY", .{} },
         // suppress this one because the CFE_UNDERLINE enum value alias conflicts with the name of an enum type
         .{ "CFE_EFFECTS", .{} },
         // these types have values that conflict with their own enum type name
@@ -2342,7 +2381,7 @@ const FuncPtrKind = union(enum) {
     },
 };
 
-fn generateArchPrefix(writer: *CodeWriter, module_depth: u2, arches: ArchFlags, prefix: []const u8) !void {
+fn generateArchPrefix(writer: *CodeWriter, module_depth: u4, arches: ArchFlags, prefix: []const u8) !void {
     std.debug.assert(arches.flags != ArchFlags.all.flags);
     try writer.linef("{s}usingnamespace switch (@import(\"{s}zig.zig\").arch) {{", .{ prefix, import_prefix_table[module_depth] });
 
@@ -2369,7 +2408,20 @@ fn generateFunction(
     func_kind: FuncPtrKind,
 ) !void {
     switch (func_kind) {
-        .fixed => try jsonObjEnforceKnownFieldsOnly(function_obj, &[_][]const u8{ "Name", "Platform", "Architectures", "SetLastError", "DllImport", "ReturnType", "ReturnAttrs", "Attrs", "Params" }, sdk_file),
+        .fixed => try jsonObjEnforceKnownFieldsOnly(function_obj, &[_][]const u8{
+            "Name",
+            "Platform",
+            "Architectures",
+            "SetLastError",
+            "DllImport",
+            "ReturnType",
+            "ReturnAttrs",
+            "Attrs",
+            "Params",
+            "EntryPoint",
+            "CallingConvention",
+            "Constant",
+        }, sdk_file),
         .ptr, .com => try jsonObjEnforceKnownFieldsOnly(function_obj, &[_][]const u8{ "Kind", "Name", "Platform", "Architectures", "SetLastError", "ReturnType", "ReturnAttrs", "Attrs", "Params" }, sdk_file),
     }
 
@@ -2412,6 +2464,7 @@ fn generateFunction(
     }
 
     var is_noreturn = false;
+    var is_obselete = false;
     for (attrs.items) |attr_node| {
         switch (attr_node) {
             .string => |attr| {
@@ -2422,6 +2475,9 @@ fn generateFunction(
                     // values into errors
                 } else if (std.mem.eql(u8, attr, "DoesNotReturn")) {
                     is_noreturn = true;
+                } else if (std.mem.eql(u8, attr, "Obselete")) {
+                    try writer.line("// this function is obselete");
+                    is_obselete = true;
                 } else jsonPanic();
             },
             else => jsonPanic(),
@@ -2689,7 +2745,7 @@ pub fn isBuiltinId(s: []const u8) bool {
 
 // NOTE: this data could be generated automatically by doing a first pass
 fn getParamNamesToAvoidMapGetFn(json_name: []const u8) AvoidLookupFn {
-    if (std.mem.eql(u8, json_name, "System.Mmc")) return std.ComptimeStringMap(Nothing, .{
+    if (std.mem.eql(u8, json_name, "Windows.Win32.System.Mmc")) return std.ComptimeStringMap(Nothing, .{
         .{ "Node", .{} },
         .{ "Nodes", .{} },
         .{ "Frame", .{} },
@@ -2709,27 +2765,39 @@ fn getParamNamesToAvoidMapGetFn(json_name: []const u8) AvoidLookupFn {
         .{ "ContextMenu", .{} },
         .{ "Guid", .{} },
     }).get;
-    if (std.mem.eql(u8, json_name, "UI.TabletPC")) return std.ComptimeStringMap(Nothing, .{
+    if (std.mem.eql(u8, json_name, "Windows.Win32.System.WinRT.Metadata")) return std.ComptimeStringMap(Nothing, .{
+        .{ "tdImport", .{} },
+        .{ "mdtExportedType", .{} },
+    }).get;
+    if (std.mem.eql(u8, json_name, "Windows.Win32.System.Diagnostics.Debug.Extensions")) return std.ComptimeStringMap(Nothing, .{
+        .{ "Guid", .{} },
+        .{ "Symbol", .{} },
+    }).get;
+    if (std.mem.eql(u8, json_name, "Windows.Win32.Media.DirectShow.Tv")) return std.ComptimeStringMap(Nothing, .{
+        .{ "AnalogVideoStandard", .{} },
+        .{ "Guid", .{} },
+    }).get;
+    if (std.mem.eql(u8, json_name, "Windows.Win32.UI.TabletPC")) return std.ComptimeStringMap(Nothing, .{
         .{ "EventMask", .{} },
         .{ "InkDisplayMode", .{} },
         .{ "Guid", .{} },
     }).get;
-    if (std.mem.eql(u8, json_name, "UI.Shell")) return std.ComptimeStringMap(Nothing, .{
+    if (std.mem.eql(u8, json_name, "Windows.Win32.UI.Shell")) return std.ComptimeStringMap(Nothing, .{
         .{ "Folder", .{} },
     }).get;
-    if (std.mem.eql(u8, json_name, "Media.DirectShow")) return std.ComptimeStringMap(Nothing, .{
+    if (std.mem.eql(u8, json_name, "Windows.Win32.Media.DirectShow")) return std.ComptimeStringMap(Nothing, .{
         .{ "Quality", .{} },
         .{ "ScanModulationTypes", .{} },
         .{ "AnalogVideoStandard", .{} },
         .{ "Guid", .{} },
     }).get;
-    if (std.mem.eql(u8, json_name, "Media.Speech")) return std.ComptimeStringMap(Nothing, .{
+    if (std.mem.eql(u8, json_name, "Windows.Win32.Media.Speech")) return std.ComptimeStringMap(Nothing, .{
         .{ "Guid", .{} },
     }).get;
-    if (std.mem.eql(u8, json_name, "Media.MediaFoundation")) return std.ComptimeStringMap(Nothing, .{
+    if (std.mem.eql(u8, json_name, "Windows.Win32.Media.MediaFoundation")) return std.ComptimeStringMap(Nothing, .{
         .{ "Guid", .{} },
     }).get;
-    if (std.mem.eql(u8, json_name, "System.Diagnostics.Debug")) return std.ComptimeStringMap(Nothing, .{
+    if (std.mem.eql(u8, json_name, "Windows.Win32.System.Diagnostics.Debug")) return std.ComptimeStringMap(Nothing, .{
         .{ "Guid", .{} },
         .{ "Symbol", .{} },
     }).get;

@@ -98,7 +98,7 @@ fn pass1OnFile(out: OutWriter, filename: []const u8, file: std.fs.File) !void {
     var json_tree = blk: {
         // TODO: call parseFromSliceLeaky because we are using an arena allocator
         break :blk json.parseFromSlice(json.Value, allocator, content[start..], .{}) catch |e|
-            fatalTrace(@errorReturnTrace(), "failed to parse '{s}' with {s}", .{filename, @errorName(e)});
+            fatalTrace(@errorReturnTrace(), "failed to parse '{s}' with {s}", .{ filename, @errorName(e) });
     };
     defer json_tree.deinit();
     const parse_time = std.time.milliTimestamp() - parse_start;
@@ -127,6 +127,8 @@ fn pass1OnJson(out: OutWriter, filename: []const u8, root_obj: json.ObjectMap) !
 
         if (std.mem.eql(u8, kind, "NativeTypedef")) {
             try generateNativeTypedef(out, filename, json_obj_prefix, type_obj, name);
+        } else if (std.mem.eql(u8, kind, "MetadataTypedef")) {
+            try generateNativeTypedef(out, filename, json_obj_prefix, type_obj, name);
         } else if (std.mem.eql(u8, kind, "Enum")) {
             try writeType(out, json_obj_prefix, name, "Enum");
         } else if (std.mem.eql(u8, kind, "Union")) {
@@ -146,7 +148,9 @@ fn pass1OnJson(out: OutWriter, filename: []const u8, root_obj: json.ObjectMap) !
 
 const native_integral_types = std.ComptimeStringMap(Nothing, .{
     .{ "Byte", .{} },
+    .{ "Int16", .{} },
     .{ "Int32", .{} },
+    .{ "Int64", .{} },
     .{ "UInt32", .{} },
     .{ "UInt64", .{} },
     .{ "IntPtr", .{} },

@@ -20,9 +20,9 @@ pub fn build(b: *Builder) !void {
     const optimize = b.standardOptimizeOption(.{});
 
     const win32json_repo = GitRepoStep.create(b, .{
-        .url = "https://github.com/marlersoft/win32json",
-        .branch = "21.0.3-preview",
-        .sha = "0337052317c881f541bd992c085347ff612725a8",
+        .url = "https://github.com/lodinukal/win32json",
+        .branch = "55.0.45-preview",
+        .sha = "68c59ba87bbcfeb8a714fb05d5dda93b94bce230",
     });
 
     const run_pass1 = blk: {
@@ -116,13 +116,13 @@ fn addExample(
 ) !void {
     const basename = concat(b, &.{ root, ".zig" });
     for (arches) |cross_arch_opt| {
-        const name = if (cross_arch_opt) |arch| concat(b, &.{ root, "-", arch}) else root;
+        const name = if (cross_arch_opt) |arch| concat(b, &.{ root, "-", arch }) else root;
 
-        const arch_os_abi = if (cross_arch_opt) |arch| concat(b, &.{ arch, "-windows"}) else "native";
+        const arch_os_abi = if (cross_arch_opt) |arch| concat(b, &.{ arch, "-windows" }) else "native";
         const target = std.zig.CrossTarget.parse(.{ .arch_os_abi = arch_os_abi }) catch unreachable;
         const exe = b.addExecutable(.{
             .name = name,
-            .root_source_file = .{ .path = b.pathJoin(&.{ "examples", basename}) },
+            .root_source_file = .{ .path = b.pathJoin(&.{ "examples", basename }) },
             .target = target,
             .optimize = optimize,
         });
@@ -132,11 +132,11 @@ fn addExample(
         examples_step.dependOn(&exe.step);
 
         const desc_suffix: []const u8 = if (cross_arch_opt) |_| "" else " for the native target";
-        const build_desc = b.fmt("Build {s}{s}", .{name, desc_suffix});
+        const build_desc = b.fmt("Build {s}{s}", .{ name, desc_suffix });
         b.step(concat(b, &.{ name, "-build" }), build_desc).dependOn(&exe.step);
 
         const run_cmd = b.addRunArtifact(exe);
-        const run_desc = b.fmt("Run {s}{s}", .{name, desc_suffix});
+        const run_desc = b.fmt("Run {s}{s}", .{ name, desc_suffix });
         b.step(name, run_desc).dependOn(&run_cmd.step);
 
         if (builtin.os.tag == .windows) {
